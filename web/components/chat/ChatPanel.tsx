@@ -14,6 +14,11 @@ import { cn } from '@/lib/utils';
 import { getSupabaseBrowser } from '@/lib/supabase';
 import { truncateWallet } from '@/lib/format';
 import { useMe } from '@/lib/auth/useMe';
+import { SuperChatButton } from './SuperChatButton';
+import {
+  SUPER_CHAT_TIER_COPY,
+  type SuperChatTier,
+} from '@gleamers/shared';
 
 interface Props {
   slug: string;
@@ -31,6 +36,8 @@ interface Row {
   was_noticed: boolean;
   is_super_chat: boolean;
   super_chat_tier: number | null;
+  super_chat_amount: string | null;
+  super_chat_pinned_until: string | null;
   created_at: string;
 }
 
@@ -39,6 +46,18 @@ interface DisplayMessage extends Row {
   wallet_address: string | null;
   noticed: boolean;
 }
+
+const SUPER_CHAT_TIER_CARD: Record<SuperChatTier, string> = {
+  1: 'border-amber-500/60 bg-amber-500/10 ring-1 ring-amber-500/40',
+  2: 'border-purple-500/60 bg-purple-500/10 ring-1 ring-purple-500/40',
+  3: 'border-fuchsia-500/60 bg-gradient-to-br from-fuchsia-500/20 via-purple-500/20 to-amber-500/20 ring-2 ring-fuchsia-400/50 [box-shadow:0_0_24px_-4px_rgb(232_121_249/0.7)]',
+};
+
+const SUPER_CHAT_TIER_ENTRY: Record<SuperChatTier, string> = {
+  1: 'animate-in slide-in-from-top fade-in duration-300',
+  2: 'animate-in slide-in-from-top fade-in duration-500',
+  3: 'animate-in zoom-in fade-in duration-700',
+};
 
 const PAGE_SIZE = 60;
 
@@ -84,7 +103,7 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
       const { data: rows, error } = await sb
         .from('chat_messages')
         .select(
-          'id, session_id, user_id, content, was_noticed, is_super_chat, super_chat_tier, created_at',
+          'id, session_id, user_id, content, was_noticed, is_super_chat, super_chat_tier, super_chat_amount, super_chat_pinned_until, created_at',
         )
         .eq('session_id', sessionId!)
         .order('created_at', { ascending: true })
@@ -232,6 +251,29 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
       : `Chat as ${truncateWallet(me.wallet_address ?? '')}`;
   }, [isLive, me]);
 
+  const { pinnedSuper, restFeed } = useMemo(() => {
+    const now = Date.now();
+    const pins: DisplayMessage[] = [];
+    const rest: DisplayMessage[] = [];
+    for (const m of messages) {
+      const pinnedActive =
+        m.is_super_chat &&
+        m.super_chat_pinned_until &&
+        new Date(m.super_chat_pinned_until).getTime() > now;
+      if (pinnedActive) pins.push(m);
+      else rest.push(m);
+    }
+    // Highest tier first, then most recent.
+    pins.sort((a, b) => {
+      const tierDiff = (b.super_chat_tier ?? 0) - (a.super_chat_tier ?? 0);
+      if (tierDiff !== 0) return tierDiff;
+      return (
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    });
+    return { pinnedSuper: pins, restFeed: rest };
+  }, [messages]);
+
   async function send() {
     if (!isLive || !input.trim() || sending) return;
     setSending(true);
@@ -290,6 +332,14 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
         </span>
       </div>
 
+      {pinnedSuper.length > 0 ? (
+        <div className="space-y-2 border-b border-border bg-background/40 p-3">
+          {pinnedSuper.map((m) => (
+            <SuperChatCard key={m.id} message={m} />
+          ))}
+        </div>
+      ) : null}
+
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -301,36 +351,42 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
           </p>
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {messages.map((m) => (
-              <li
-                key={m.id}
-                className={cn(
-                  'rounded-md px-2 py-1.5 leading-snug transition-colors',
-                  m.noticed &&
-                    'bg-primary/15 ring-1 ring-primary/40 [box-shadow:0_0_12px_-2px_hsl(var(--primary)/0.6)]',
-                )}
-              >
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span
-                    className={cn(
-                      'font-medium',
-                      m.wallet_address
-                        ? 'text-primary'
-                        : 'text-muted-foreground',
-                    )}
-                  >
-                    {m.display_name}
-                  </span>
-                  <span>{formatClock(m.created_at)}</span>
-                  {m.noticed ? (
-                    <span className="rounded-full bg-primary/20 px-1.5 text-[9px] font-semibold uppercase tracking-widest text-primary">
-                      Seen
+            {restFeed.map((m) =>
+              m.is_super_chat ? (
+                <li key={m.id}>
+                  <SuperChatCard message={m} variant="feed" />
+                </li>
+              ) : (
+                <li
+                  key={m.id}
+                  className={cn(
+                    'rounded-md px-2 py-1.5 leading-snug transition-colors',
+                    m.noticed &&
+                      'bg-primary/15 ring-1 ring-primary/40 [box-shadow:0_0_12px_-2px_hsl(var(--primary)/0.6)]',
+                  )}
+                >
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span
+                      className={cn(
+                        'font-medium',
+                        m.wallet_address
+                          ? 'text-primary'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {m.display_name}
                     </span>
-                  ) : null}
-                </div>
-                <div className="break-words">{m.content}</div>
-              </li>
-            ))}
+                    <span>{formatClock(m.created_at)}</span>
+                    {m.noticed ? (
+                      <span className="rounded-full bg-primary/20 px-1.5 text-[9px] font-semibold uppercase tracking-widest text-primary">
+                        Seen
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="break-words">{m.content}</div>
+                </li>
+              ),
+            )}
           </ul>
         )}
 
@@ -356,18 +412,64 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
             placeholder={placeholder}
             className="min-h-[42px] flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
           />
-          <Button
-            type="button"
-            onClick={() => void send()}
-            disabled={!isLive || !input.trim() || sending}
-          >
-            {sending ? 'Sending…' : 'Send'}
-          </Button>
+          <div className="flex flex-col gap-2">
+            <Button
+              type="button"
+              onClick={() => void send()}
+              disabled={!isLive || !input.trim() || sending}
+            >
+              {sending ? 'Sending…' : 'Send'}
+            </Button>
+            <SuperChatButton slug={slug} disabled={!isLive} />
+          </div>
         </div>
         {error ? (
           <p className="mt-2 text-xs text-destructive-foreground">{error}</p>
         ) : null}
       </div>
     </aside>
+  );
+}
+
+interface SuperChatCardProps {
+  message: DisplayMessage;
+  variant?: 'pinned' | 'feed';
+}
+
+function SuperChatCard({ message, variant = 'pinned' }: SuperChatCardProps) {
+  const tier = (message.super_chat_tier ?? 1) as SuperChatTier;
+  const tierCopy = SUPER_CHAT_TIER_COPY[tier];
+  return (
+    <div
+      className={cn(
+        'rounded-lg border px-3 py-2 text-sm',
+        SUPER_CHAT_TIER_CARD[tier],
+        variant === 'pinned' ? SUPER_CHAT_TIER_ENTRY[tier] : '',
+      )}
+    >
+      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest">
+        <span>Super Chat</span>
+        <span className="rounded-sm bg-black/30 px-1.5 py-0.5 text-white">
+          {tierCopy.name}
+        </span>
+        <span className="text-muted-foreground">{tierCopy.pinBlurb}</span>
+      </div>
+      <div className="mt-1 flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+        <span
+          className={cn(
+            'font-medium',
+            message.wallet_address
+              ? 'text-primary'
+              : 'text-muted-foreground',
+          )}
+        >
+          {message.display_name}
+        </span>
+        <span>{formatClock(message.created_at)}</span>
+      </div>
+      <div className="mt-1 break-words text-sm leading-snug text-foreground">
+        {message.content}
+      </div>
+    </div>
   );
 }

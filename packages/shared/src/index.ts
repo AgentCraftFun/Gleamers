@@ -182,6 +182,32 @@ export type PendingDeployRow = {
   expires_at: string;
 };
 
+export type PendingSuperChatStatus =
+  | 'awaiting_tx'
+  | 'confirmed'
+  | 'failed'
+  | 'abandoned';
+
+export type PendingSuperChatRow = {
+  id: string;
+  streamer_id: string;
+  session_id: string;
+  user_id: string;
+  tier: SuperChatTier;
+  tier_amount: string;
+  message: string;
+  message_hash: string;
+  streamer_id_bytes32: string;
+  streamer_owner: string;
+  status: PendingSuperChatStatus;
+  tx_hash: string | null;
+  finalized_at: string | null;
+  chat_message_id: string | null;
+  payment_event_id: string | null;
+  created_at: string;
+  expires_at: string;
+};
+
 // ---------------------------------------------------------------------------
 // Supabase Database schema (for @supabase/supabase-js generic)
 // ---------------------------------------------------------------------------
@@ -280,6 +306,13 @@ export type Database = {
           'id' | 'created_at' | 'expires_at' | 'status'
         >
       >;
+      pending_super_chats: TableDef<
+        PendingSuperChatRow,
+        InsertOf<
+          PendingSuperChatRow,
+          'id' | 'created_at' | 'expires_at' | 'status'
+        >
+      >;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
@@ -299,7 +332,43 @@ export interface SuperChatTierInfo {
 export const SUPER_CHAT_TIERS: Record<SuperChatTier, SuperChatTierInfo> = {
   1: { tier: SuperChatTier.TIER_1, pinnedForSeconds: 180, priority: 'low' },
   2: { tier: SuperChatTier.TIER_2, pinnedForSeconds: 600, priority: 'medium' },
-  3: { tier: SuperChatTier.TIER_3, pinnedForSeconds: 300, priority: 'top' },
+  3: { tier: SuperChatTier.TIER_3, pinnedForSeconds: 1800, priority: 'top' },
+};
+
+/**
+ * Max length of a super-chat message. Matches the on-chain receipt
+ * size target and keeps tier 3 cards from overflowing the panel.
+ */
+export const SUPER_CHAT_MAX_CHARS = 200;
+
+/**
+ * When a Tier 3 super chat is addressed by the streamer, the pin is
+ * extended this many seconds beyond the acknowledgement timestamp.
+ */
+export const SUPER_CHAT_TIER3_POST_ADDRESS_SECONDS = 300;
+
+export interface SuperChatTierCopy {
+  name: string;
+  pinBlurb: string;
+  priorityBlurb: string;
+}
+
+export const SUPER_CHAT_TIER_COPY: Record<SuperChatTier, SuperChatTierCopy> = {
+  1: {
+    name: 'Tier 1',
+    pinBlurb: 'Pinned 3 min',
+    priorityBlurb: 'Seen soon',
+  },
+  2: {
+    name: 'Tier 2',
+    pinBlurb: 'Pinned 10 min',
+    priorityBlurb: 'Priority response',
+  },
+  3: {
+    name: 'Tier 3',
+    pinBlurb: 'Pinned until addressed',
+    priorityBlurb: 'Top priority',
+  },
 };
 
 export const SESSION_LENGTH_MS = 60 * 60 * 1000;

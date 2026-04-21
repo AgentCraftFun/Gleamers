@@ -36,7 +36,13 @@ import { StreamerBrain } from './brain/streamer-brain.js';
 import { SpeakingPublisher } from './brain/speaking-publisher.js';
 import { ChatSelector } from './brain/chat-selector.js';
 import { ChatSubscriber } from './brain/chat-subscriber.js';
+import { SuperChatQueue } from './brain/super-chat-queue.js';
 import type { BrainExpression, ChatTrigger } from './brain/types.js';
+import {
+  SUPER_CHAT_TIER3_POST_ADDRESS_SECONDS,
+  SuperChatTier,
+  type SuperChatTier as SuperChatTierT,
+} from '@gleamers/shared';
 
 // ---------------------------------------------------------------------------
 // Env
@@ -76,6 +82,7 @@ interface RuntimeState {
   brain: StreamerBrain;
   speaking: SpeakingPublisher;
   chatSelector: ChatSelector;
+  superChatQueue: SuperChatQueue;
   chatSubscriber: ChatSubscriber | null;
 }
 
@@ -137,6 +144,7 @@ async function loadRuntime(): Promise<RuntimeState> {
     brain,
     speaking: new SpeakingPublisher(streamer.slug),
     chatSelector,
+    superChatQueue: new SuperChatQueue(),
     chatSubscriber: null,
   };
 }
@@ -193,9 +201,10 @@ function mapExpression(e: BrainExpression): WorkerFrame['type'] extends never
 }
 
 interface ResponseInstructions {
-  mode: 'monologue' | 'chat_response';
+  mode: 'monologue' | 'chat_response' | 'super_chat_response';
   chatTrigger?: ChatTrigger;
   triggerMessageId?: string;
+  superChatTier?: SuperChatTierT;
 }
 
 const NO_CHAT_FORCE_MS = 15_000;
@@ -205,17 +214,30 @@ const RESPOND_TO_CHAT_PROB = 0.7;
 function decideNext(): ResponseInstructions {
   if (!state) return { mode: 'monologue' };
 
-  // Pull from the selector.
+  // 1. Super chat queue always wins.
+  if (state.superChatQueue.size > 0) {
+    const sc = state.superChatQueue.pickNext();
+    if (sc) {
+      return {
+        mode: 'super_chat_response',
+        triggerMessageId: sc.messageId,
+        superChatTier: sc.tier,
+        chatTrigger: {
+          username: sc.displayName,
+          content: sc.content,
+          tier: sc.tier,
+        },
+      };
+    }
+  }
+
+  // 2. Normal chat selector.
   const pendingCount = state.chatSelector.size;
   const msSinceChat = state.chatSelector.msSinceLastChat;
 
-  // Nothing to respond to
   if (pendingCount === 0) return { mode: 'monologue' };
-
-  // Forced monologue if chat has been silent for >= 15s
   if (msSinceChat >= NO_CHAT_FORCE_MS) return { mode: 'monologue' };
 
-  // Force respond if pending queue is backed up
   const forceRespond = pendingCount > FORCE_RESPOND_PENDING;
   const takeChat = forceRespond || Math.random() < RESPOND_TO_CHAT_PROB;
   if (!takeChat) return { mode: 'monologue' };
@@ -247,9 +269,23 @@ async function runOneResponse(): Promise<void> {
     });
     try {
       const sb = getSupabase();
+      const now = new Date();
+      const updates: {
+        was_noticed: boolean;
+        super_chat_addressed_at?: string;
+        super_chat_pinned_until?: string;
+      } = { was_noticed: true };
+      if (instructions.mode === 'super_chat_response') {
+        updates.super_chat_addressed_at = now.toISOString();
+        if (instructions.superChatTier === SuperChatTier.TIER_3) {
+          updates.super_chat_pinned_until = new Date(
+            now.getTime() + SUPER_CHAT_TIER3_POST_ADDRESS_SECONDS * 1000,
+          ).toISOString();
+        }
+      }
       await sb
         .from('chat_messages')
-        .update({ was_noticed: true })
+        .update(updates)
         .eq('id', instructions.triggerMessageId);
     } catch (err) {
       log('chat_messages was_noticed update failed:', err);
@@ -266,7 +302,7 @@ async function runOneResponse(): Promise<void> {
       mode: instructions.mode,
       lore: state.lore,
       chatTrigger: instructions.chatTrigger,
-    });
+    } as Parameters<typeof state.brain.generate>[0]);
     for await (const frame of frames) {
       if (state.ended) break;
       if (aborter.signal.aborted) break;
@@ -541,9 +577,18 @@ async function main() {
     state.streamer.slug,
     (envelope) => {
       if (!state || state.ended) return;
-      // Super chats are handled by a separate priority queue in a
-      // later prompt. Only feed normal chat into the selector here.
-      if (envelope.isSuperChat) return;
+      if (envelope.isSuperChat) {
+        const tier = (envelope.superChatTier ?? 1) as SuperChatTierT;
+        state.superChatQueue.push({
+          messageId: envelope.messageId,
+          userId: envelope.userId,
+          displayName: envelope.displayName,
+          content: envelope.content,
+          tier,
+          createdAt: envelope.createdAt,
+        });
+        return;
+      }
       state.chatSelector.add({
         messageId: envelope.messageId,
         userId: envelope.userId,
