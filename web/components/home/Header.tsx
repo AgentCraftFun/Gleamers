@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
+import { ConnectWalletButton } from '@/components/auth/ConnectWalletButton';
 
 interface Props {
   tokenLive: boolean;
@@ -43,9 +43,7 @@ export function Header({ tokenLive }: Props) {
           <span className="rounded-full border border-border bg-card px-2 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
             {tokenLive ? 'Token live' : 'Pre-launch'}
           </span>
-          <Button variant="outline" size="sm" disabled title="Wallet connect ships in the next prompt">
-            Connect Wallet
-          </Button>
+          <ConnectWalletButton />
         </div>
       </div>
     </header>
