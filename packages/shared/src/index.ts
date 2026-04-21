@@ -319,3 +319,72 @@ export const REVENUE_SPLIT = {
   superChat: { streamerOwnerBps: 9000, treasuryBps: 1000 },
   deployFee: { burnBps: 2000, treasuryBps: 8000 },
 } as const;
+
+// ---------------------------------------------------------------------------
+// Worker <-> Web WebSocket protocol
+// ---------------------------------------------------------------------------
+
+export type WorkerExpression =
+  | 'happy'
+  | 'angry'
+  | 'surprised'
+  | 'thinking'
+  | 'laughing'
+  | 'neutral';
+
+export interface WorkerAudioFormat {
+  sampleRate: number;
+  encoding: 'pcm_s16le';
+  channels: 1;
+}
+
+export type WorkerFrame =
+  | {
+      type: 'hello';
+      sessionId: string;
+      slug: string;
+      streamerName: string;
+      avatarVrmUrl: string;
+      audioFormat: WorkerAudioFormat;
+      endsAt: string;
+      timestamp: number;
+    }
+  | {
+      type: 'response_start';
+      responseId: string;
+      timestamp: number;
+    }
+  | {
+      type: 'audio_chunk';
+      responseId: string;
+      data: string; // base64 PCM s16le
+      timestamp: number;
+    }
+  | {
+      type: 'response_end';
+      responseId: string;
+      timestamp: number;
+    }
+  | {
+      type: 'text';
+      content: string;
+      responseId: string;
+      sentenceIndex: number;
+      timestamp: number;
+    }
+  | {
+      type: 'expression';
+      expression: WorkerExpression;
+      timestamp: number;
+    }
+  | {
+      type: 'session_info';
+      endsAt: string;
+      secondsRemaining: number;
+      timestamp: number;
+    }
+  | {
+      type: 'session_ending';
+      reason: 'timer' | 'crash' | 'platform_stop' | 'revival_timer';
+      timestamp: number;
+    };
