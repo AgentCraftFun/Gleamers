@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@gleamers/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.45.4",
     "fastify": "^4.28.1"
   },
   "devDependencies": {

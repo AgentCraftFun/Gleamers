@@ -2,4 +2,5 @@ packages:
   - 'web'
   - 'worker'
   - 'orchestrator'
+  - 'supabase'
   - 'packages/*'
