@@ -40,7 +40,8 @@ export type PendingDeployStatus =
   | 'awaiting_payment'
   | 'paid'
   | 'finalized'
-  | 'abandoned';
+  | 'abandoned'
+  | 'failed';
 
 // ---------------------------------------------------------------------------
 // DB row shapes (snake_case, mirroring Supabase)
@@ -178,8 +179,20 @@ export type PendingDeployRow = {
   proposed_slug: string;
   status: PendingDeployStatus;
   tx_hash: string | null;
+  deploy_fee_amount: string;
+  pending_id_bytes32: string | null;
+  streamer_id: string | null;
+  payment_event_id: string | null;
   created_at: string;
   expires_at: string;
+};
+
+export type WaitlistEmailRow = {
+  id: string;
+  email: string;
+  wallet_address: string | null;
+  source: string;
+  created_at: string;
 };
 
 export type PendingSuperChatStatus =
@@ -313,6 +326,10 @@ export type Database = {
           'id' | 'created_at' | 'expires_at' | 'status'
         >
       >;
+      waitlist_emails: TableDef<
+        WaitlistEmailRow,
+        InsertOf<WaitlistEmailRow, 'id' | 'created_at' | 'source'>
+      >;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
@@ -388,6 +405,71 @@ export const REVENUE_SPLIT = {
   superChat: { streamerOwnerBps: 9000, treasuryBps: 1000 },
   deployFee: { burnBps: 2000, treasuryBps: 8000 },
 } as const;
+
+// ---------------------------------------------------------------------------
+// Deploy-form config
+// ---------------------------------------------------------------------------
+
+export interface DeployVoice {
+  id: string;
+  label: string;
+  accent: string;
+  vibe: string;
+}
+
+/**
+ * Twelve curated Cartesia voice slots. Replace the `id` values with
+ * real voice IDs from Cartesia console before launch — the shape is
+ * stable for the UI.
+ */
+export const DEPLOY_VOICES: DeployVoice[] = [
+  { id: 'voice-deep-calm',      label: 'Deep Calm',      accent: 'en-US', vibe: 'steady, gravelly' },
+  { id: 'voice-gentle-warm',    label: 'Gentle Warm',    accent: 'en-US', vibe: 'soft, kind' },
+  { id: 'voice-chaotic-hype',   label: 'Chaotic Hype',   accent: 'en-US', vibe: 'fast, excitable' },
+  { id: 'voice-femme-gen-z',    label: 'Gen-Z Femme',    accent: 'en-US', vibe: 'lilty, sardonic' },
+  { id: 'voice-dude-bro',       label: 'Dude Bro',       accent: 'en-US', vibe: 'loose, smirking' },
+  { id: 'voice-dry-scholar',    label: 'Dry Scholar',    accent: 'en-GB', vibe: 'precise, wry' },
+  { id: 'voice-fairy-tale',     label: 'Fairy Tale',     accent: 'en-US', vibe: 'airy, lilting' },
+  { id: 'voice-noir-narrator',  label: 'Noir Narrator',  accent: 'en-US', vibe: 'low, weary' },
+  { id: 'voice-paranoid-uncle', label: 'Paranoid Uncle', accent: 'en-US', vibe: 'urgent whisper' },
+  { id: 'voice-sunny-teen',     label: 'Sunny Teen',     accent: 'en-US', vibe: 'bright, fast' },
+  { id: 'voice-gravel-elder',   label: 'Gravel Elder',   accent: 'en-US', vibe: 'deliberate, low' },
+  { id: 'voice-shy-speaker',    label: 'Shy Speaker',    accent: 'en-US', vibe: 'hesitant, soft' },
+];
+
+export interface DeployPreset {
+  id: string;
+  label: string;
+  /** Public path under /public/presets/<file>.vrm */
+  vrmPath: string;
+}
+
+export const DEPLOY_PRESETS: DeployPreset[] = [
+  { id: 'preset-1', label: 'Gleamer A', vrmPath: '/presets/gleamer-a.vrm' },
+  { id: 'preset-2', label: 'Gleamer B', vrmPath: '/presets/gleamer-b.vrm' },
+  { id: 'preset-3', label: 'Gleamer C', vrmPath: '/presets/gleamer-c.vrm' },
+  { id: 'preset-4', label: 'Gleamer D', vrmPath: '/presets/gleamer-d.vrm' },
+  { id: 'preset-5', label: 'Gleamer E', vrmPath: '/presets/gleamer-e.vrm' },
+  { id: 'preset-6', label: 'Gleamer F', vrmPath: '/presets/gleamer-f.vrm' },
+];
+
+export const DEPLOY_LIMITS = {
+  nameMax: 32,
+  vibeMax: 140,
+  speechPatternsMax: 180,
+  coreOpinionsMax: 5,
+  coreOpinionItemMax: 120,
+  likesMax: 8,
+  hatesMax: 8,
+  backstoryMax: 600,
+  monologueTopicsMax: 6,
+  quirksMax: 6,
+  tabooTopicsMax: 4,
+  vrmMaxBytes: 10 * 1024 * 1024,
+} as const;
+
+export const DEPLOY_STARTERS = ['paranoid', 'unhinged', 'scholar'] as const;
+export type DeployStarterKey = (typeof DEPLOY_STARTERS)[number];
 
 // ---------------------------------------------------------------------------
 // Worker <-> Web WebSocket protocol
