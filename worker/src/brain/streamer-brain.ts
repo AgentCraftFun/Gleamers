@@ -4,6 +4,7 @@ import type { PersonalityConfig } from '@gleamers/shared';
 import { compilePrompt } from './personality-compiler.js';
 import { streamCartesia } from './cartesia.js';
 import { SentenceBuffer, parseSentence } from './sentence-buffer.js';
+import { OutputModerator, pickPivot } from './output-moderator.js';
 import type { BrainContext, BrainFrame } from './types.js';
 
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
@@ -23,7 +24,13 @@ export interface StreamerBrainOptions {
   maxTokens?: number;
   /** Skip TTS entirely (useful for dry runs). */
   skipTts?: boolean;
+  /** Inject an already-built moderator, or pass false to disable. */
+  outputModerator?: OutputModerator | false;
+  /** Consecutive flagged sentences that abort the response. Default 3. */
+  maxFlaggedPerResponse?: number;
 }
+
+const DEFAULT_MAX_FLAGGED = 3;
 
 const USER_PROMPT_BY_MODE = {
   monologue: 'Go.',
@@ -56,6 +63,8 @@ export class StreamerBrain {
   private readonly skipTts: boolean;
   private readonly anthropic: Anthropic;
   private readonly cartesiaApiKey: string | undefined;
+  private readonly moderator: OutputModerator | null;
+  private readonly maxFlagged: number;
 
   constructor(opts: StreamerBrainOptions) {
     this.personality = opts.personalityConfig;
@@ -65,6 +74,7 @@ export class StreamerBrain {
     this.sampleRate = opts.sampleRate ?? 24000;
     this.maxTokensOverride = opts.maxTokens;
     this.skipTts = opts.skipTts ?? false;
+    this.maxFlagged = opts.maxFlaggedPerResponse ?? DEFAULT_MAX_FLAGGED;
 
     const anthropicKey =
       opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY;
@@ -76,6 +86,14 @@ export class StreamerBrain {
     this.cartesiaApiKey = opts.cartesiaApiKey ?? process.env.CARTESIA_API_KEY;
     if (!this.skipTts && !this.cartesiaApiKey) {
       throw new Error('Missing CARTESIA_API_KEY (or pass skipTts=true)');
+    }
+
+    if (opts.outputModerator === false) {
+      this.moderator = null;
+    } else if (opts.outputModerator instanceof OutputModerator) {
+      this.moderator = opts.outputModerator;
+    } else {
+      this.moderator = new OutputModerator({ apiKey: anthropicKey });
     }
   }
 
@@ -98,8 +116,32 @@ export class StreamerBrain {
     const buffer = new SentenceBuffer();
     let full = '';
     let sentenceIndex = 0;
+    let flaggedCount = 0;
+    let aborted = false;
+
+    const processSentence = async function* (
+      this: StreamerBrain,
+      raw: string,
+    ): AsyncGenerator<BrainFrame, boolean, void> {
+      const idx = sentenceIndex++;
+      const result = yield* this.emitSentence(raw, idx);
+      if (result === 'flagged') {
+        flaggedCount += 1;
+        if (flaggedCount >= this.maxFlagged) {
+          yield {
+            type: 'moderation_event',
+            kind: 'output_regenerated',
+            sentenceIndex: idx,
+            rawText: raw,
+          };
+          return true; // signal abort
+        }
+      }
+      return false;
+    }.bind(this);
 
     for await (const event of stream) {
+      if (aborted) break;
       if (
         event.type === 'content_block_delta' &&
         event.delta.type === 'text_delta'
@@ -110,24 +152,77 @@ export class StreamerBrain {
 
         const ready = buffer.push(chunk);
         for (const sentence of ready) {
-          yield* this.emitSentence(sentence, sentenceIndex++);
+          const abort = yield* processSentence(sentence);
+          if (abort) {
+            aborted = true;
+            break;
+          }
         }
       }
     }
 
-    const tail = buffer.flush();
-    if (tail) {
-      yield* this.emitSentence(tail, sentenceIndex++);
+    if (!aborted) {
+      const tail = buffer.flush();
+      if (tail) {
+        yield* processSentence(tail);
+      }
     }
 
     yield { type: 'done', fullText: full };
   }
 
+  /**
+   * Emit a single sentence. Runs output moderation before TTS; when
+   * the moderator flags the sentence we emit a `moderation_event` and
+   * substitute a static in-character pivot so playback stays fluid.
+   * Yields a generator that returns either 'ok' or 'flagged' so the
+   * outer loop can count + abort.
+   */
   private async *emitSentence(
     rawSentence: string,
     sentenceIndex: number,
-  ): AsyncGenerator<BrainFrame, void, void> {
+  ): AsyncGenerator<BrainFrame, 'ok' | 'flagged', void> {
     const parsed = parseSentence(rawSentence);
+    if (parsed.ttsText.length === 0) {
+      return 'ok';
+    }
+
+    if (this.moderator) {
+      let flagged = false;
+      try {
+        flagged = await this.moderator.isFlagged(parsed.ttsText);
+      } catch (err) {
+        // Fail open — a broken moderator shouldn't stop the stream.
+        console.warn('[streamer-brain] moderator threw:', err);
+      }
+      if (flagged) {
+        yield {
+          type: 'moderation_event',
+          kind: 'output_blocked',
+          sentenceIndex,
+          rawText: rawSentence,
+        };
+        // Substitute a pivot so the TTS timeline has something to say.
+        const pivot = pickPivot();
+        yield {
+          type: 'sentence',
+          text: pivot,
+          sentenceIndex,
+        };
+        if (!this.skipTts && this.cartesiaApiKey) {
+          for await (const audio of streamCartesia({
+            apiKey: this.cartesiaApiKey,
+            voiceId: this.voiceId,
+            text: pivot,
+            modelId: this.ttsModelId,
+            sampleRate: this.sampleRate,
+          })) {
+            yield { type: 'audio_chunk', audio, sentenceIndex };
+          }
+        }
+        return 'flagged';
+      }
+    }
 
     for (const expression of parsed.expressions) {
       yield { type: 'expression', expression, atIndex: sentenceIndex };
@@ -138,8 +233,8 @@ export class StreamerBrain {
       sentenceIndex,
     };
 
-    if (this.skipTts || parsed.ttsText.length === 0 || !this.cartesiaApiKey) {
-      return;
+    if (this.skipTts || !this.cartesiaApiKey) {
+      return 'ok';
     }
 
     for await (const audio of streamCartesia({
@@ -151,5 +246,6 @@ export class StreamerBrain {
     })) {
       yield { type: 'audio_chunk', audio, sentenceIndex };
     }
+    return 'ok';
   }
 }

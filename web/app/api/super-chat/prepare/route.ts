@@ -5,6 +5,7 @@ import { SUPER_CHAT_MAX_CHARS, SuperChatTier } from '@gleamers/shared';
 import { createSupabaseAdmin } from '@/lib/supabase';
 import { readSession } from '@/lib/auth/session';
 import { moderate } from '@/lib/chat/moderation';
+import { checkBlocklist } from '@/lib/chat/blocklist';
 import { isTokenLive } from '@/lib/token-balance';
 import {
   paymentsAddress,
@@ -86,7 +87,23 @@ export async function POST(req: Request) {
   }
 
   // Moderate BEFORE committing gas. On hit, log and return 400 — the
-  // user shouldn't pay for a message that won't be addressed.
+  // user shouldn't pay for a message that won't be addressed. Run the
+  // local blocklist first so obvious hits skip the OpenAI round-trip.
+  const block = await checkBlocklist(trimmed);
+  if (block.blocked) {
+    await sb.from('moderation_events').insert({
+      event_type: 'super_chat_blocked',
+      session_id: streamer.current_session_id,
+      user_id: session.userId,
+      content_snippet: trimmed.slice(0, 200),
+      reason: block.reason,
+    });
+    return NextResponse.json(
+      { error: 'moderation_blocked' },
+      { status: 400 },
+    );
+  }
+
   const mod = await moderate(trimmed);
   if (mod.flagged) {
     await sb.from('moderation_events').insert({

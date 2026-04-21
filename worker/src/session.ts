@@ -126,6 +126,7 @@ interface RuntimeState {
 }
 
 let state: RuntimeState | null = null;
+let forceMonologueNext = false;
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -254,6 +255,15 @@ const RESPOND_TO_CHAT_PROB = 0.7;
 
 function decideNext(): ResponseInstructions {
   if (!state) return { mode: 'monologue' };
+
+  // If the last response was aborted for output moderation, force one
+  // monologue cycle before we try a chat / super-chat trigger again.
+  if (forceMonologueNext) {
+    forceMonologueNext = false;
+    // Still drain any queued super chat's trigger? No — skip this
+    // cycle on purpose. The super chat stays queued for next round.
+    return { mode: 'monologue' };
+  }
 
   // 1. Super chat queue gets first look, bound by the 30s gap rule
   //    (Tier 3 bypasses the gap so whales never sit).
@@ -406,6 +416,27 @@ async function runOneResponse(): Promise<void> {
             data: Buffer.from(frame.audio).toString('base64'),
             timestamp: Date.now(),
           });
+          break;
+        case 'moderation_event':
+          // Log + count; the brain already inserted a pivot sentence
+          // for output_blocked, and ended generation for output_regenerated.
+          try {
+            const sb = getSupabase();
+            await sb.from('moderation_events').insert({
+              event_type: frame.kind,
+              session_id: SESSION_ID!,
+              user_id: null,
+              content_snippet: frame.rawText.slice(0, 200),
+              reason: `responseId=${responseId} sentence=${frame.sentenceIndex}`,
+            });
+          } catch (err) {
+            log('moderation_events insert failed:', err);
+          }
+          if (frame.kind === 'output_regenerated') {
+            // Force the *next* loop iteration into monologue mode so a
+            // chat trigger doesn't drag us back into the same territory.
+            forceMonologueNext = true;
+          }
           break;
         case 'done':
           fullText = frame.fullText;

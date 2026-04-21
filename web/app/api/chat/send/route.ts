@@ -7,6 +7,7 @@ import {
 import { createSupabaseAdmin } from '@/lib/supabase';
 import { resolveActor } from '@/lib/chat/users';
 import { moderate } from '@/lib/chat/moderation';
+import { checkBlocklist } from '@/lib/chat/blocklist';
 import { CHAT_RULES, checkRateLimit } from '@/lib/rate-limit';
 import { getRedis } from '@/lib/redis';
 
@@ -106,7 +107,24 @@ export async function POST(req: Request) {
     );
   }
 
-  // Moderation
+  // Blocklist (cheap, hot-reloadable) runs before OpenAI moderation
+  // so obvious matches don't pay a network round-trip.
+  const block = await checkBlocklist(content);
+  if (block.blocked) {
+    await sb.from('moderation_events').insert({
+      event_type: 'input_blocked',
+      session_id: streamer.current_session_id,
+      user_id: actor.userId,
+      content_snippet: content.slice(0, 200),
+      reason: block.reason,
+    });
+    return NextResponse.json(
+      { error: 'moderation_blocked' },
+      { status: 400 },
+    );
+  }
+
+  // OpenAI moderation
   const mod = await moderate(content);
   if (mod.flagged) {
     await sb.from('moderation_events').insert({

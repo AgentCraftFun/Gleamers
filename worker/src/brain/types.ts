@@ -30,6 +30,12 @@ export type BrainFrame =
   | { type: 'expression'; expression: BrainExpression; atIndex: number }
   | { type: 'audio_chunk'; audio: Uint8Array; sentenceIndex: number }
   | { type: 'sentence'; text: string; sentenceIndex: number }
+  | {
+      type: 'moderation_event';
+      kind: 'output_blocked' | 'output_regenerated';
+      sentenceIndex: number;
+      rawText: string;
+    }
   | { type: 'done'; fullText: string };
 
 export interface CompilePromptInput {
