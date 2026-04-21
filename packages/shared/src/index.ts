@@ -461,6 +461,12 @@ export type WorkerFrame =
       type: 'message_noticed';
       messageId: string;
       timestamp: number;
+    }
+  | {
+      type: 'super_chat_addressed';
+      messageId: string;
+      tier: SuperChatTier;
+      timestamp: number;
     };
 
 // ---------------------------------------------------------------------------

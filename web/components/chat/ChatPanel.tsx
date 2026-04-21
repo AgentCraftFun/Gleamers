@@ -26,6 +26,8 @@ interface Props {
   isLive: boolean;
   /** Message IDs the worker has flagged as noticed (live push). */
   noticedMessageIds: Set<string>;
+  /** Super-chat message IDs the worker has addressed. */
+  addressedSuperChatIds: Set<string>;
 }
 
 interface Row {
@@ -38,6 +40,7 @@ interface Row {
   super_chat_tier: number | null;
   super_chat_amount: string | null;
   super_chat_pinned_until: string | null;
+  super_chat_addressed_at: string | null;
   created_at: string;
 }
 
@@ -81,7 +84,13 @@ function formatClock(iso: string): string {
   }
 }
 
-export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props) {
+export function ChatPanel({
+  slug,
+  sessionId,
+  isLive,
+  noticedMessageIds,
+  addressedSuperChatIds,
+}: Props) {
   const { me, refresh: refreshMe } = useMe();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
@@ -103,7 +112,7 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
       const { data: rows, error } = await sb
         .from('chat_messages')
         .select(
-          'id, session_id, user_id, content, was_noticed, is_super_chat, super_chat_tier, super_chat_amount, super_chat_pinned_until, created_at',
+          'id, session_id, user_id, content, was_noticed, is_super_chat, super_chat_tier, super_chat_amount, super_chat_pinned_until, super_chat_addressed_at, created_at',
         )
         .eq('session_id', sessionId!)
         .order('created_at', { ascending: true })
@@ -196,7 +205,13 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
           setMessages((prev) =>
             prev.map((m) =>
               m.id === row.id
-                ? { ...m, was_noticed: row.was_noticed, noticed: row.was_noticed }
+                ? {
+                    ...m,
+                    was_noticed: row.was_noticed,
+                    noticed: row.was_noticed,
+                    super_chat_addressed_at: row.super_chat_addressed_at,
+                    super_chat_pinned_until: row.super_chat_pinned_until,
+                  }
                 : m,
             ),
           );
@@ -335,7 +350,13 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
       {pinnedSuper.length > 0 ? (
         <div className="space-y-2 border-b border-border bg-background/40 p-3">
           {pinnedSuper.map((m) => (
-            <SuperChatCard key={m.id} message={m} />
+            <SuperChatCard
+              key={m.id}
+              message={m}
+              addressed={
+                !!m.super_chat_addressed_at || addressedSuperChatIds.has(m.id)
+              }
+            />
           ))}
         </div>
       ) : null}
@@ -354,7 +375,14 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
             {restFeed.map((m) =>
               m.is_super_chat ? (
                 <li key={m.id}>
-                  <SuperChatCard message={m} variant="feed" />
+                  <SuperChatCard
+                    message={m}
+                    variant="feed"
+                    addressed={
+                      !!m.super_chat_addressed_at ||
+                      addressedSuperChatIds.has(m.id)
+                    }
+                  />
                 </li>
               ) : (
                 <li
@@ -434,9 +462,14 @@ export function ChatPanel({ slug, sessionId, isLive, noticedMessageIds }: Props)
 interface SuperChatCardProps {
   message: DisplayMessage;
   variant?: 'pinned' | 'feed';
+  addressed?: boolean;
 }
 
-function SuperChatCard({ message, variant = 'pinned' }: SuperChatCardProps) {
+function SuperChatCard({
+  message,
+  variant = 'pinned',
+  addressed = false,
+}: SuperChatCardProps) {
   const tier = (message.super_chat_tier ?? 1) as SuperChatTier;
   const tierCopy = SUPER_CHAT_TIER_COPY[tier];
   return (
@@ -453,6 +486,11 @@ function SuperChatCard({ message, variant = 'pinned' }: SuperChatCardProps) {
           {tierCopy.name}
         </span>
         <span className="text-muted-foreground">{tierCopy.pinBlurb}</span>
+        {addressed ? (
+          <span className="ml-auto rounded-full bg-emerald-500/25 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-emerald-200 ring-1 ring-emerald-500/40">
+            ✓ Addressed by streamer
+          </span>
+        ) : null}
       </div>
       <div className="mt-1 flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
         <span

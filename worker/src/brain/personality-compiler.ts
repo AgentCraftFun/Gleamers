@@ -40,11 +40,27 @@ function formatLore(input: CompilePromptInput): string {
     arr.push(row.content);
     byType.set(row.lore_type, arr);
   }
-  const parts: string[] = [];
-  for (const [type, items] of byType) {
-    parts.push(`- ${type}:\n    ${items.join('\n    ')}`);
+
+  const supporterItems = byType.get('super_chat_supporter') ?? [];
+  byType.delete('super_chat_supporter');
+
+  const sections: string[] = [];
+  if (supporterItems.length > 0) {
+    // Cap to the most-recent / top-scoring five so the prompt doesn't
+    // explode on long-running streamers.
+    const head = supporterItems.slice(0, 5);
+    sections.push(
+      `You remember who supports you:\n    ${head.join('\n    ')}`,
+    );
   }
-  return `\nThings you remember:\n${parts.join('\n')}`;
+
+  const rest: string[] = [];
+  for (const [type, items] of byType) {
+    rest.push(`- ${type}:\n    ${items.join('\n    ')}`);
+  }
+  if (rest.length > 0) sections.push(rest.join('\n'));
+
+  return `\nThings you remember:\n${sections.join('\n\n')}`;
 }
 
 function formatRecentContext(input: CompilePromptInput): string {

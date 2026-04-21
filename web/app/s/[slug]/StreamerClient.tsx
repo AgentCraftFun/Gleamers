@@ -97,6 +97,7 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
     unlockAudio,
     audioUnlocked,
     noticedMessageIds,
+    addressedSuperChatIds,
   } = useWorkerSession({
     wsUrl: isLive ? wsUrl : null,
     enabled: isLive,
@@ -240,6 +241,7 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
             sessionId={wsInfo?.sessionId ?? hello?.sessionId ?? null}
             isLive={isLive}
             noticedMessageIds={noticedMessageIds}
+            addressedSuperChatIds={addressedSuperChatIds}
           />
         </div>
       </div>

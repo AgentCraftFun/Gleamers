@@ -68,6 +68,45 @@ const SAMPLE_RATE = 24000;
 const log = (...args: unknown[]) => console.log('[session]', ...args);
 
 // ---------------------------------------------------------------------------
+// Lore reinforcement: remember supporters
+// ---------------------------------------------------------------------------
+
+const SUPPORTER_LORE_SCORE = 1.5;
+const SUPPORTER_LORE_SNIPPET_MAX = 120;
+
+function paraphrase(message: string): string {
+  const trimmed = message.replace(/\s+/g, ' ').trim();
+  if (trimmed.length <= SUPPORTER_LORE_SNIPPET_MAX) return trimmed;
+  return `${trimmed.slice(0, SUPPORTER_LORE_SNIPPET_MAX - 1)}…`;
+}
+
+async function reinforceSupporterLore(params: {
+  displayName: string;
+  userId: string;
+  tier: SuperChatTierT;
+  messageContent: string;
+}): Promise<void> {
+  if (!state) return;
+  try {
+    const sb = getSupabase();
+    const snippet = paraphrase(params.messageContent);
+    await sb.from('streamer_lore').insert({
+      streamer_id: state.streamer.id,
+      lore_type: 'super_chat_supporter',
+      content: `${params.displayName} sent tier ${params.tier} super chat, asked ${snippet}`,
+      metadata: {
+        userId: params.userId,
+        tier: params.tier,
+        sessionId: SESSION_ID,
+      },
+      relevance_score: SUPPORTER_LORE_SCORE,
+    });
+  } catch (err) {
+    log('lore reinforcement failed:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shared mutable state
 // ---------------------------------------------------------------------------
 
@@ -205,6 +244,8 @@ interface ResponseInstructions {
   chatTrigger?: ChatTrigger;
   triggerMessageId?: string;
   superChatTier?: SuperChatTierT;
+  superChatDisplayName?: string;
+  superChatUserId?: string;
 }
 
 const NO_CHAT_FORCE_MS = 15_000;
@@ -214,14 +255,17 @@ const RESPOND_TO_CHAT_PROB = 0.7;
 function decideNext(): ResponseInstructions {
   if (!state) return { mode: 'monologue' };
 
-  // 1. Super chat queue always wins.
-  if (state.superChatQueue.size > 0) {
+  // 1. Super chat queue gets first look, bound by the 30s gap rule
+  //    (Tier 3 bypasses the gap so whales never sit).
+  if (state.superChatQueue.shouldPickNow()) {
     const sc = state.superChatQueue.pickNext();
     if (sc) {
       return {
         mode: 'super_chat_response',
         triggerMessageId: sc.messageId,
         superChatTier: sc.tier,
+        superChatDisplayName: sc.displayName,
+        superChatUserId: sc.userId,
         chatTrigger: {
           username: sc.displayName,
           content: sc.content,
@@ -267,6 +311,17 @@ async function runOneResponse(): Promise<void> {
       messageId: instructions.triggerMessageId,
       timestamp: Date.now(),
     });
+    if (
+      instructions.mode === 'super_chat_response' &&
+      instructions.superChatTier
+    ) {
+      broadcast({
+        type: 'super_chat_addressed',
+        messageId: instructions.triggerMessageId,
+        tier: instructions.superChatTier,
+        timestamp: Date.now(),
+      });
+    }
     try {
       const sb = getSupabase();
       const now = new Date();
@@ -289,6 +344,23 @@ async function runOneResponse(): Promise<void> {
         .eq('id', instructions.triggerMessageId);
     } catch (err) {
       log('chat_messages was_noticed update failed:', err);
+    }
+
+    // Lore reinforcement runs in the background so we don't block
+    // the TTS response on a DB round-trip.
+    if (
+      instructions.mode === 'super_chat_response' &&
+      instructions.superChatTier &&
+      instructions.superChatDisplayName &&
+      instructions.superChatUserId &&
+      instructions.chatTrigger
+    ) {
+      void reinforceSupporterLore({
+        displayName: instructions.superChatDisplayName,
+        userId: instructions.superChatUserId,
+        tier: instructions.superChatTier,
+        messageContent: instructions.chatTrigger.content,
+      });
     }
   }
 

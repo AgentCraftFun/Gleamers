@@ -33,6 +33,7 @@ export interface UseWorkerSessionState {
   unlockAudio: () => Promise<void>;
   audioUnlocked: boolean;
   noticedMessageIds: Set<string>;
+  addressedSuperChatIds: Set<string>;
 }
 
 interface Options {
@@ -159,6 +160,9 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
   const [noticedMessageIds, setNoticedMessageIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [addressedSuperChatIds, setAddressedSuperChatIds] = useState<
+    Set<string>
+  >(() => new Set());
 
   const wsRef = useRef<WebSocket | null>(null);
   const pipeRef = useRef<AudioPipeline | null>(null);
@@ -256,6 +260,14 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
             return next;
           });
           break;
+        case 'super_chat_addressed':
+          setAddressedSuperChatIds((prev) => {
+            if (prev.has(frame.messageId)) return prev;
+            const next = new Set(prev);
+            next.add(frame.messageId);
+            return next;
+          });
+          break;
       }
     });
 
@@ -301,5 +313,6 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
     unlockAudio,
     audioUnlocked,
     noticedMessageIds,
+    addressedSuperChatIds,
   };
 }
