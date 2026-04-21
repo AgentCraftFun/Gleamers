@@ -387,4 +387,28 @@ export type WorkerFrame =
       type: 'session_ending';
       reason: 'timer' | 'crash' | 'platform_stop' | 'revival_timer';
       timestamp: number;
+    }
+  | {
+      type: 'message_noticed';
+      messageId: string;
+      timestamp: number;
     };
+
+// ---------------------------------------------------------------------------
+// Redis pub/sub envelope: chat:<slug>
+// ---------------------------------------------------------------------------
+
+export interface ChatPublishEnvelope {
+  messageId: string;
+  sessionId: string;
+  slug: string;
+  userId: string;
+  displayName: string;
+  content: string;
+  senderTokenBalance: string;
+  isSuperChat: boolean;
+  superChatTier?: SuperChatTier;
+  createdAt: string;
+}
+
+export const CHAT_CHANNEL_PREFIX = 'chat:';

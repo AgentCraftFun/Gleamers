@@ -34,7 +34,9 @@ import { COOLDOWN_MS } from '@gleamers/shared';
 import { getSupabase } from './supabase.js';
 import { StreamerBrain } from './brain/streamer-brain.js';
 import { SpeakingPublisher } from './brain/speaking-publisher.js';
-import type { BrainExpression } from './brain/types.js';
+import { ChatSelector } from './brain/chat-selector.js';
+import { ChatSubscriber } from './brain/chat-subscriber.js';
+import type { BrainExpression, ChatTrigger } from './brain/types.js';
 
 // ---------------------------------------------------------------------------
 // Env
@@ -73,6 +75,8 @@ interface RuntimeState {
   loopAborter: AbortController | null;
   brain: StreamerBrain;
   speaking: SpeakingPublisher;
+  chatSelector: ChatSelector;
+  chatSubscriber: ChatSubscriber | null;
 }
 
 let state: RuntimeState | null = null;
@@ -117,6 +121,11 @@ async function loadRuntime(): Promise<RuntimeState> {
     sampleRate: SAMPLE_RATE,
   });
 
+  const chatSelector = new ChatSelector({
+    streamerName: streamer.name,
+    tokenLive: process.env.TOKEN_LIVE === 'true',
+  });
+
   return {
     streamer: streamer as StreamerRow,
     lore: lore ?? [],
@@ -127,6 +136,8 @@ async function loadRuntime(): Promise<RuntimeState> {
     loopAborter: null,
     brain,
     speaking: new SpeakingPublisher(streamer.slug),
+    chatSelector,
+    chatSubscriber: null,
   };
 }
 
@@ -181,10 +192,69 @@ function mapExpression(e: BrainExpression): WorkerFrame['type'] extends never
   return e;
 }
 
+interface ResponseInstructions {
+  mode: 'monologue' | 'chat_response';
+  chatTrigger?: ChatTrigger;
+  triggerMessageId?: string;
+}
+
+const NO_CHAT_FORCE_MS = 15_000;
+const FORCE_RESPOND_PENDING = 10;
+const RESPOND_TO_CHAT_PROB = 0.7;
+
+function decideNext(): ResponseInstructions {
+  if (!state) return { mode: 'monologue' };
+
+  // Pull from the selector.
+  const pendingCount = state.chatSelector.size;
+  const msSinceChat = state.chatSelector.msSinceLastChat;
+
+  // Nothing to respond to
+  if (pendingCount === 0) return { mode: 'monologue' };
+
+  // Forced monologue if chat has been silent for >= 15s
+  if (msSinceChat >= NO_CHAT_FORCE_MS) return { mode: 'monologue' };
+
+  // Force respond if pending queue is backed up
+  const forceRespond = pendingCount > FORCE_RESPOND_PENDING;
+  const takeChat = forceRespond || Math.random() < RESPOND_TO_CHAT_PROB;
+  if (!takeChat) return { mode: 'monologue' };
+
+  const chosen = state.chatSelector.pickNext();
+  if (!chosen) return { mode: 'monologue' };
+  return {
+    mode: 'chat_response',
+    triggerMessageId: chosen.messageId,
+    chatTrigger: {
+      username: chosen.displayName,
+      content: chosen.content,
+    },
+  };
+}
+
 async function runOneResponse(): Promise<void> {
   if (!state || state.ended) return;
   const responseId = randomUUID();
   let fullText = '';
+
+  const instructions = decideNext();
+
+  if (instructions.triggerMessageId) {
+    broadcast({
+      type: 'message_noticed',
+      messageId: instructions.triggerMessageId,
+      timestamp: Date.now(),
+    });
+    try {
+      const sb = getSupabase();
+      await sb
+        .from('chat_messages')
+        .update({ was_noticed: true })
+        .eq('id', instructions.triggerMessageId);
+    } catch (err) {
+      log('chat_messages was_noticed update failed:', err);
+    }
+  }
 
   broadcast({ type: 'response_start', responseId, timestamp: Date.now() });
 
@@ -193,8 +263,9 @@ async function runOneResponse(): Promise<void> {
 
   try {
     const frames = state.brain.generate({
-      mode: 'monologue',
+      mode: instructions.mode,
       lore: state.lore,
+      chatTrigger: instructions.chatTrigger,
     });
     for await (const frame of frames) {
       if (state.ended) break;
@@ -229,7 +300,6 @@ async function runOneResponse(): Promise<void> {
           });
           break;
         case 'done':
-          // fullText may already be accumulated; prefer brain-provided
           fullText = frame.fullText;
           break;
       }
@@ -245,9 +315,13 @@ async function runOneResponse(): Promise<void> {
   if (fullText.trim().length > 0) {
     try {
       const sb = getSupabase();
+      const triggeredIds = instructions.triggerMessageId
+        ? [instructions.triggerMessageId]
+        : null;
       await sb.from('ai_responses').insert({
         session_id: SESSION_ID!,
         content: fullText.trim(),
+        triggered_by_chat_ids: triggeredIds,
         model_used: 'claude-haiku-4-5-20251001',
       });
     } catch (err) {
@@ -373,6 +447,8 @@ async function endSession(reason: SessionEndReason): Promise<void> {
   state.clients.clear();
 
   await state.speaking.stop();
+  state.chatSelector.stop();
+  if (state.chatSubscriber) await state.chatSubscriber.stop();
 
   log('session ended; exit 0');
   // let logs flush
@@ -458,6 +534,28 @@ async function main() {
   log(`loaded streamer=${state.streamer.slug} endsAt=${state.scheduledEndAt.toISOString()}`);
 
   state.speaking.start();
+  state.chatSelector.start();
+
+  // Redis chat subscription (no-op if REDIS_URL absent)
+  state.chatSubscriber = new ChatSubscriber(
+    state.streamer.slug,
+    (envelope) => {
+      if (!state || state.ended) return;
+      // Super chats are handled by a separate priority queue in a
+      // later prompt. Only feed normal chat into the selector here.
+      if (envelope.isSuperChat) return;
+      state.chatSelector.add({
+        messageId: envelope.messageId,
+        userId: envelope.userId,
+        displayName: envelope.displayName,
+        content: envelope.content,
+        tokenBalance: envelope.senderTokenBalance,
+        createdAt: envelope.createdAt,
+      });
+    },
+  );
+  state.chatSubscriber.start();
+
   await startHealth();
   startWs();
   startSessionInfoHeartbeat();

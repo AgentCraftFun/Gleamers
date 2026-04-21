@@ -32,6 +32,7 @@ export interface UseWorkerSessionState {
   audioElement: HTMLAudioElement | null;
   unlockAudio: () => Promise<void>;
   audioUnlocked: boolean;
+  noticedMessageIds: Set<string>;
 }
 
 interface Options {
@@ -155,6 +156,9 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
     null,
   );
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [noticedMessageIds, setNoticedMessageIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
   const pipeRef = useRef<AudioPipeline | null>(null);
@@ -244,6 +248,14 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
         case 'session_ending':
           setSessionEnded(frame);
           break;
+        case 'message_noticed':
+          setNoticedMessageIds((prev) => {
+            if (prev.has(frame.messageId)) return prev;
+            const next = new Set(prev);
+            next.add(frame.messageId);
+            return next;
+          });
+          break;
       }
     });
 
@@ -288,5 +300,6 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
     audioElement,
     unlockAudio,
     audioUnlocked,
+    noticedMessageIds,
   };
 }

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { VRMAvatar } from '@/components/vrm/VRMAvatar';
 import { cn } from '@/lib/utils';
 import { useWorkerSession } from '@/lib/workerSession';
+import { ChatPanel } from '@/components/chat/ChatPanel';
 import type { StreamerStatus } from '@gleamers/shared';
 
 interface Streamer {
@@ -95,6 +96,7 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
     audioElement,
     unlockAudio,
     audioUnlocked,
+    noticedMessageIds,
   } = useWorkerSession({
     wsUrl: isLive ? wsUrl : null,
     enabled: isLive,
@@ -233,14 +235,12 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
             ) : null}
           </section>
 
-          <aside className="flex min-h-[420px] flex-col rounded-xl border border-border bg-card p-4">
-            <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-foreground">
-              Chat
-            </h2>
-            <div className="mt-3 flex-1 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-              Chat lands in a later prompt.
-            </div>
-          </aside>
+          <ChatPanel
+            slug={streamer.slug}
+            sessionId={wsInfo?.sessionId ?? hello?.sessionId ?? null}
+            isLive={isLive}
+            noticedMessageIds={noticedMessageIds}
+          />
         </div>
       </div>
     </main>
