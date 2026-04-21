@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+.turbo/
+.cache/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS / editors
+.DS_Store
+*.log
+.idea/
+.vscode/
+*.swp
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Coverage
+coverage/
