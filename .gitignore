@@ -28,3 +28,6 @@ contracts/broadcast/
 
 # Coverage
 coverage/
+
+# Large binary fallback (download locally — see web/public/README.md)
+web/public/demo.vrm
