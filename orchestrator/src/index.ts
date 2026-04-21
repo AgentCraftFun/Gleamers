@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 
 import { registerStreamerRoutes } from './routes/streamers.js';
+import { registerSessionRoutes } from './routes/sessions.js';
 import { attachWsProxy } from './wsProxy.js';
 import {
   REVIVAL_CHECK_INTERVAL_MS,
@@ -10,6 +11,7 @@ import {
   cooldownResolver,
   lifecycleSweep,
   revivalCheck,
+  scheduleDailyLoreDecay,
   startupReconcile,
 } from './tasks.js';
 
@@ -32,6 +34,7 @@ app.get('/health', async () => ({
 }));
 
 await registerStreamerRoutes(app);
+await registerSessionRoutes(app);
 
 async function start() {
   // Fastify.ready() wires everything up before we grab the raw server.
@@ -72,11 +75,17 @@ async function start() {
     app.log.info('[orch] revival disabled (REVIVAL_ENABLED=false)');
   }
 
+  // Daily lore decay. Fires first at the next 03:00 UTC, then every 24h.
+  const decayHandles = scheduleDailyLoreDecay();
+  app.log.info('[orch] daily lore decay scheduled (03:00 UTC)');
+
   const shutdown = async (signal: string) => {
     app.log.info(`[orch] received ${signal}, shutting down`);
     clearInterval(lifecycleTimer);
     clearInterval(cooldownTimer);
     if (revivalTimer) clearInterval(revivalTimer);
+    clearTimeout(decayHandles.initialTimer);
+    if (decayHandles.intervalTimer) clearInterval(decayHandles.intervalTimer);
     try {
       await app.close();
     } finally {

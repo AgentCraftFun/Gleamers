@@ -37,6 +37,10 @@ import { SpeakingPublisher } from './brain/speaking-publisher.js';
 import { ChatSelector } from './brain/chat-selector.js';
 import { ChatSubscriber } from './brain/chat-subscriber.js';
 import { SuperChatQueue } from './brain/super-chat-queue.js';
+import { ExchangeHistory } from './brain/exchange-history.js';
+import { assembleAndUploadTranscript } from './brain/transcript.js';
+import { reinforceLore } from './brain/lore-reinforcement.js';
+import { triggerPostProcess } from './brain/post-process-client.js';
 import type { BrainExpression, ChatTrigger } from './brain/types.js';
 import {
   SUPER_CHAT_TIER3_POST_ADDRESS_SECONDS,
@@ -123,6 +127,7 @@ interface RuntimeState {
   chatSelector: ChatSelector;
   superChatQueue: SuperChatQueue;
   chatSubscriber: ChatSubscriber | null;
+  history: ExchangeHistory;
 }
 
 let state: RuntimeState | null = null;
@@ -186,6 +191,7 @@ async function loadRuntime(): Promise<RuntimeState> {
     chatSelector,
     superChatQueue: new SuperChatQueue(),
     chatSubscriber: null,
+    history: new ExchangeHistory(),
   };
 }
 
@@ -379,11 +385,28 @@ async function runOneResponse(): Promise<void> {
   const aborter = new AbortController();
   state.loopAborter = aborter;
 
+  // Record the user-side exchange for this response (chat_response +
+  // super_chat_response only; monologues have nothing to record yet).
+  if (
+    instructions.chatTrigger &&
+    (instructions.mode === 'chat_response' ||
+      instructions.mode === 'super_chat_response')
+  ) {
+    state.history.push({
+      role: 'user',
+      text: instructions.chatTrigger.content,
+      username: instructions.chatTrigger.username,
+      tier: instructions.chatTrigger.tier,
+      timestamp: Date.now(),
+    });
+  }
+
   try {
     const frames = state.brain.generate({
       mode: instructions.mode,
       lore: state.lore,
       chatTrigger: instructions.chatTrigger,
+      recentContext: state.history.asRecentContext(),
     } as Parameters<typeof state.brain.generate>[0]);
     for await (const frame of frames) {
       if (state.ended) break;
@@ -466,6 +489,20 @@ async function runOneResponse(): Promise<void> {
     } catch (err) {
       log('ai_responses insert failed:', err);
     }
+
+    state.history.push({
+      role: 'ai',
+      text: fullText.trim(),
+      timestamp: Date.now(),
+    });
+
+    // Maybe collapse older half into a summary if the context is
+    // heading toward the 8k-token ceiling. Fire-and-forget — a
+    // summarisation miss just means we try again next cycle.
+    void state.history.maybeSummarize();
+
+    // Bump relevance of any lore rows this response touched.
+    void reinforceLore(state.streamer.id, state.lore, fullText);
   }
 }
 
@@ -588,6 +625,15 @@ async function endSession(reason: SessionEndReason): Promise<void> {
   await state.speaking.stop();
   state.chatSelector.stop();
   if (state.chatSubscriber) await state.chatSubscriber.stop();
+
+  // Transcript upload + kick off post-processing in the orchestrator.
+  // Both are best-effort — crashes don't block exit.
+  try {
+    await assembleAndUploadTranscript(SESSION_ID!, state.streamer.slug);
+    await triggerPostProcess(SESSION_ID!);
+  } catch (err) {
+    log('post-session tasks failed:', err);
+  }
 
   log('session ended; exit 0');
   // let logs flush

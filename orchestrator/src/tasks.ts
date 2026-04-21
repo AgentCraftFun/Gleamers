@@ -184,6 +184,98 @@ export async function startupReconcile(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// Daily lore decay — 3am UTC
+//
+// Multiplies every streamer_lore.relevance_score by 0.9 and deletes
+// rows below 0.1. Schedule is aligned to 03:00 UTC — the scheduler
+// fires once at the next 3am, then every 24h.
+// ---------------------------------------------------------------------------
+
+const DECAY_MULTIPLIER = 0.9;
+const DECAY_MIN = 0.1;
+
+export async function dailyLoreDecay(): Promise<{
+  decayed: number;
+  pruned: number;
+}> {
+  const sb = getSupabase();
+  // Use the Postgres expression so we don't have to fetch every row.
+  // Supabase-js doesn't expose raw SQL — emulate with an RPC fallback
+  // via two queries: fetch IDs + scores, batch updates, then delete.
+  const { data: rows, error } = await sb
+    .from('streamer_lore')
+    .select('id, relevance_score');
+  if (error) {
+    console.error('[decay] fetch failed:', error.message);
+    return { decayed: 0, pruned: 0 };
+  }
+  let decayed = 0;
+  let pruned = 0;
+  for (const row of rows ?? []) {
+    const next = (row.relevance_score ?? 1) * DECAY_MULTIPLIER;
+    if (next < DECAY_MIN) {
+      const { error: delErr } = await sb
+        .from('streamer_lore')
+        .delete()
+        .eq('id', row.id);
+      if (!delErr) pruned++;
+    } else {
+      const { error: upErr } = await sb
+        .from('streamer_lore')
+        .update({ relevance_score: next })
+        .eq('id', row.id);
+      if (!upErr) decayed++;
+    }
+  }
+  console.log(`[decay] ran: decayed=${decayed} pruned=${pruned}`);
+  return { decayed, pruned };
+}
+
+const DAY_MS_DECAY = 24 * 60 * 60 * 1000;
+
+function millisUntilNext3AmUTC(now = Date.now()): number {
+  const d = new Date(now);
+  const target = Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    3,
+    0,
+    0,
+    0,
+  );
+  const next = target > now ? target : target + DAY_MS_DECAY;
+  return next - now;
+}
+
+/**
+ * Align the decay to 03:00 UTC. Returns the handles so shutdown can
+ * clear both the initial timeout and the follow-up interval.
+ */
+export function scheduleDailyLoreDecay(): {
+  initialTimer: NodeJS.Timeout;
+  intervalTimer: NodeJS.Timeout | null;
+} {
+  const result: {
+    initialTimer: NodeJS.Timeout;
+    intervalTimer: NodeJS.Timeout | null;
+  } = { initialTimer: null as unknown as NodeJS.Timeout, intervalTimer: null };
+
+  result.initialTimer = setTimeout(() => {
+    dailyLoreDecay().catch((err) =>
+      console.error('[decay] initial run failed:', err),
+    );
+    result.intervalTimer = setInterval(() => {
+      dailyLoreDecay().catch((err) =>
+        console.error('[decay] run failed:', err),
+      );
+    }, DAY_MS_DECAY);
+  }, millisUntilNext3AmUTC());
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Featured revival — every REVIVAL_CHECK_INTERVAL_MS
 //
 // When fewer than REVIVAL_MIN_LIVE_THRESHOLD streamers are LIVE, promote
