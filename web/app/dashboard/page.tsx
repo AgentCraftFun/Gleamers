@@ -43,7 +43,7 @@ export default async function DashboardPage() {
     const { data: last } = await sb
       .from('sessions')
       .select(
-        'id, started_at, ended_at, peak_viewers, total_messages, total_super_chats, total_super_chat_revenue',
+        'id, started_at, ended_at, peak_viewers, total_messages, total_super_chats, total_super_chat_revenue, session_type',
       )
       .eq('streamer_id', s.id)
       .not('ended_at', 'is', null)
@@ -73,6 +73,7 @@ export default async function DashboardPage() {
             totalMessages: last.total_messages,
             totalSuperChats: last.total_super_chats,
             totalSuperChatRevenue: last.total_super_chat_revenue ?? '0',
+            sessionType: last.session_type,
           }
         : null,
     });

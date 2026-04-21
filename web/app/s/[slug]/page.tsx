@@ -9,6 +9,7 @@ interface PageProps {
 interface WsInfo {
   workerPort: number;
   sessionId: string;
+  sessionType?: 'debut' | 'normal' | 'revival';
   endsAt: string;
 }
 

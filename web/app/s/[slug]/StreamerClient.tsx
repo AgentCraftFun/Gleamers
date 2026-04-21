@@ -22,6 +22,7 @@ interface Streamer {
 interface WsInfo {
   workerPort: number;
   sessionId: string;
+  sessionType?: 'debut' | 'normal' | 'revival';
   endsAt: string;
 }
 
@@ -170,6 +171,14 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
+            {isLive && wsInfo?.sessionType === 'revival' ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-200"
+                title="Platform-initiated bonus session — doesn't count against this streamer's cooldown"
+              >
+                ✨ Revival
+              </span>
+            ) : null}
             {(isLive || streamer.status === 'COOLING_DOWN') &&
             displayRemaining !== null ? (
               <span className="rounded-md border border-border bg-card px-3 py-1 font-mono text-sm tabular-nums">

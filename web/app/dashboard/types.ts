@@ -8,6 +8,7 @@ export interface DashboardLastSession {
   totalMessages: number;
   totalSuperChats: number;
   totalSuperChatRevenue: string;
+  sessionType: 'debut' | 'normal' | 'revival';
 }
 
 export interface DashboardCurrentSession {

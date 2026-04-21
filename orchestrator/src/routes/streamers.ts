@@ -1,19 +1,17 @@
 import type { FastifyInstance } from 'fastify';
-import { SESSION_LENGTH_MS } from '@gleamers/shared';
-import type { SessionType, StreamerStatus } from '@gleamers/shared';
+import type { SessionType } from '@gleamers/shared';
 
 import { getSupabase } from '../supabase.js';
 import { requireApiKey } from '../auth.js';
 import {
   activeWorkers,
   getWorker,
-  registerWorker,
   removeWorker,
-  spawnWorker,
   stopWorker,
 } from '../workers.js';
 import { finalizeSession } from '../sessions.js';
 import { getRedis, SPEAKING_KEY } from '../redis.js';
+import { startStreamerSession } from '../startSession.js';
 
 interface StartBody {
   sessionType?: SessionType;
@@ -22,12 +20,6 @@ interface StartBody {
 interface StopBody {
   reason?: 'platform_stop' | 'timer' | 'crash' | 'revival_timer';
 }
-
-const ALLOWED_STATUS_BY_TYPE: Record<SessionType, StreamerStatus> = {
-  debut: 'OFFLINE',
-  normal: 'READY',
-  revival: 'COOLING_DOWN',
-};
 
 export async function registerStreamerRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------
@@ -40,117 +32,43 @@ export async function registerStreamerRoutes(app: FastifyInstance) {
       const { slug } = req.params;
       const sessionType = req.body?.sessionType ?? 'normal';
 
-      if (getWorker(slug)) {
-        reply.code(409).send({ error: 'already running', slug });
-        return;
-      }
-
-      const sb = getSupabase();
-      const { data: streamer, error } = await sb
-        .from('streamers')
-        .select('*')
-        .eq('slug', slug)
-        .maybeSingle();
-      if (error) throw error;
-      if (!streamer) {
-        reply.code(404).send({ error: 'streamer not found' });
-        return;
-      }
-
-      const expected = ALLOWED_STATUS_BY_TYPE[sessionType];
-      if (streamer.status !== expected) {
-        reply.code(409).send({
-          error: `cannot start ${sessionType}: streamer is ${streamer.status}, expected ${expected}`,
-        });
-        return;
-      }
-
-      // Revival has per-streamer 24h cap
-      if (sessionType === 'revival') {
-        const resetAt = streamer.revival_count_reset_at
-          ? new Date(streamer.revival_count_reset_at)
-          : null;
-        const within24h =
-          resetAt && Date.now() - resetAt.getTime() <= 24 * 60 * 60 * 1000;
-        const count = within24h ? streamer.revival_count_today : 0;
-        if (count >= 1) {
-          reply
-            .code(409)
-            .send({ error: 'revival cap reached (1 per 24h)' });
-          return;
+      const result = await startStreamerSession(slug, sessionType, {
+        onExit: (code, signal) =>
+          app.log.info({ slug, code, signal }, '[orch] worker exited'),
+      });
+      if (!result.ok) {
+        switch (result.error.kind) {
+          case 'already_running':
+            reply.code(409).send({ error: 'already running', slug });
+            return;
+          case 'not_found':
+            reply.code(404).send({ error: 'streamer not found' });
+            return;
+          case 'status_mismatch':
+            reply.code(409).send({
+              error: `cannot start ${sessionType}: streamer is ${result.error.current}, expected ${result.error.expected}`,
+            });
+            return;
+          case 'revival_cap_reached':
+            reply.code(409).send({ error: 'revival cap reached (1 per 24h)' });
+            return;
+          case 'db_error':
+            reply
+              .code(500)
+              .send({ error: 'db_error', detail: result.error.message });
+            return;
+          case 'spawn_error':
+            reply
+              .code(502)
+              .send({ error: 'spawn_error', detail: result.error.message });
+            return;
         }
       }
 
-      const now = new Date();
-      const endsAt = new Date(now.getTime() + SESSION_LENGTH_MS);
-
-      const { data: session, error: sessErr } = await sb
-        .from('sessions')
-        .insert({
-          streamer_id: streamer.id,
-          scheduled_end_at: endsAt.toISOString(),
-          session_type: sessionType,
-        })
-        .select('*')
-        .single();
-      if (sessErr || !session) {
-        throw sessErr ?? new Error('session insert failed');
-      }
-
-      const { error: upErr } = await sb
-        .from('streamers')
-        .update({
-          status: 'LIVE',
-          current_session_id: session.id,
-          last_active_at: now.toISOString(),
-        })
-        .eq('id', streamer.id);
-      if (upErr) throw upErr;
-
-      let spawned;
-      try {
-        spawned = spawnWorker({
-          slug,
-          sessionId: session.id,
-          sessionType,
-        });
-      } catch (err) {
-        // Roll back the sessions row + streamer on spawn failure
-        await sb.from('sessions').delete().eq('id', session.id);
-        await sb
-          .from('streamers')
-          .update({
-            status: streamer.status,
-            current_session_id: null,
-          })
-          .eq('id', streamer.id);
-        throw err;
-      }
-
-      const handle = {
-        slug,
-        sessionId: session.id,
-        sessionType,
-        port: spawned.port,
-        scheduledEndAt: endsAt,
-        child: spawned.child,
-        startedAt: now,
-        viewers: new Set<string>(),
-      };
-      registerWorker(handle);
-
-      spawned.child.once('exit', (code, signal) => {
-        app.log.info(
-          { slug, code, signal },
-          '[orch] worker exited',
-        );
-        // lifecycle watcher will reconcile via DB snapshot
-      });
-
       reply.send({
-        sessionId: session.id,
-        workerPort: spawned.port,
-        endsAt: endsAt.toISOString(),
+        sessionId: result.value.sessionId,
+        workerPort: result.value.workerPort,
+        endsAt: result.value.endsAt.toISOString(),
       });
     },
   );
@@ -208,6 +126,7 @@ export async function registerStreamerRoutes(app: FastifyInstance) {
       reply.send({
         workerPort: handle.port,
         sessionId: handle.sessionId,
+        sessionType: handle.sessionType,
         endsAt: handle.scheduledEndAt.toISOString(),
       });
     },

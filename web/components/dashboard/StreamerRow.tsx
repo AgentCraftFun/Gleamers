@@ -205,6 +205,7 @@ export function StreamerRow({ streamer }: Props) {
           <Stat
             label="Last peak"
             value={last ? last.peakViewers.toString() : '—'}
+            badge={last?.sessionType === 'revival' ? 'Revival' : null}
           />
           <Stat
             label="Last messages"
@@ -247,10 +248,28 @@ export function StreamerRow({ streamer }: Props) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  badge,
+}: {
+  label: string;
+  value: string;
+  badge?: string | null;
+}) {
   return (
     <div className="min-w-0 rounded-md border border-border/60 bg-background px-2 py-1.5">
-      <div className="uppercase tracking-widest">{label}</div>
+      <div className="flex items-center justify-between gap-1">
+        <div className="uppercase tracking-widest">{label}</div>
+        {badge ? (
+          <span
+            className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-200"
+            title="Platform revival session — bonus slot, doesn't advance this streamer's cooldown"
+          >
+            ✨ {badge}
+          </span>
+        ) : null}
+      </div>
       <div className="truncate font-mono text-sm text-foreground">{value}</div>
     </div>
   );
