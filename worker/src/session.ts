@@ -33,6 +33,7 @@ import { COOLDOWN_MS } from '@gleamers/shared';
 
 import { getSupabase } from './supabase.js';
 import { StreamerBrain } from './brain/streamer-brain.js';
+import { SpeakingPublisher } from './brain/speaking-publisher.js';
 import type { BrainExpression } from './brain/types.js';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,7 @@ interface RuntimeState {
   ended: boolean;
   loopAborter: AbortController | null;
   brain: StreamerBrain;
+  speaking: SpeakingPublisher;
 }
 
 let state: RuntimeState | null = null;
@@ -124,6 +126,7 @@ async function loadRuntime(): Promise<RuntimeState> {
     ended: false,
     loopAborter: null,
     brain,
+    speaking: new SpeakingPublisher(streamer.slug),
   };
 }
 
@@ -217,6 +220,7 @@ async function runOneResponse(): Promise<void> {
           });
           break;
         case 'audio_chunk':
+          state.speaking.markActive();
           broadcast({
             type: 'audio_chunk',
             responseId,
@@ -368,6 +372,8 @@ async function endSession(reason: SessionEndReason): Promise<void> {
   }
   state.clients.clear();
 
+  await state.speaking.stop();
+
   log('session ended; exit 0');
   // let logs flush
   setTimeout(() => process.exit(0), 100);
@@ -451,6 +457,7 @@ async function main() {
   state = await loadRuntime();
   log(`loaded streamer=${state.streamer.slug} endsAt=${state.scheduledEndAt.toISOString()}`);
 
+  state.speaking.start();
   await startHealth();
   startWs();
   startSessionInfoHeartbeat();

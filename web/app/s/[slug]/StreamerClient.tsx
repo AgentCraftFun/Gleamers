@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { VRMAvatar } from '@/components/vrm/VRMAvatar';
@@ -8,16 +8,26 @@ import { cn } from '@/lib/utils';
 import { useWorkerSession } from '@/lib/workerSession';
 import type { StreamerStatus } from '@gleamers/shared';
 
+interface Streamer {
+  id: string;
+  name: string;
+  slug: string;
+  owner_wallet: string;
+  status: StreamerStatus;
+  ready_at: string | null;
+  avatar_vrm_url: string;
+}
+
+interface WsInfo {
+  workerPort: number;
+  sessionId: string;
+  endsAt: string;
+}
+
 interface Props {
-  streamer: {
-    id: string;
-    name: string;
-    slug: string;
-    owner_wallet: string;
-    status: StreamerStatus;
-    avatar_vrm_url: string;
-  };
-  workerWsUrl: string | null;
+  streamer: Streamer;
+  wsUrl: string | null;
+  wsInfo: WsInfo | null;
 }
 
 const STATUS_STYLE: Record<StreamerStatus, string> = {
@@ -48,14 +58,37 @@ function formatRemaining(sec: number | null): string {
   return `${m}:${s}`;
 }
 
-export default function StreamerClient({ streamer, workerWsUrl }: Props) {
-  const isLive = streamer.status === 'LIVE';
+function useCountdown(targetIso: string | null): number | null {
+  const [remaining, setRemaining] = useState<number | null>(() =>
+    targetIso
+      ? Math.max(0, Math.floor((new Date(targetIso).getTime() - Date.now()) / 1000))
+      : null,
+  );
+  useEffect(() => {
+    if (!targetIso) {
+      setRemaining(null);
+      return;
+    }
+    const tick = () => {
+      setRemaining(
+        Math.max(0, Math.floor((new Date(targetIso).getTime() - Date.now()) / 1000)),
+      );
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [targetIso]);
+  return remaining;
+}
+
+export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
   const vrmUrl = streamer.avatar_vrm_url || '/demo.vrm';
+  const isLive = streamer.status === 'LIVE' && !!wsUrl;
 
   const {
-    status: wsStatus,
+    status: connStatus,
     hello,
-    secondsRemaining,
+    secondsRemaining: liveSeconds,
     subtitles,
     expression,
     sessionEnded,
@@ -63,15 +96,20 @@ export default function StreamerClient({ streamer, workerWsUrl }: Props) {
     unlockAudio,
     audioUnlocked,
   } = useWorkerSession({
-    wsUrl: isLive ? workerWsUrl : null,
+    wsUrl: isLive ? wsUrl : null,
     enabled: isLive,
   });
 
+  const cooldownRemaining = useCountdown(
+    streamer.status === 'COOLING_DOWN' ? streamer.ready_at : null,
+  );
+
   const headerTitle = hello?.streamerName ?? streamer.name;
+  const displayRemaining = isLive ? liveSeconds : cooldownRemaining;
 
   const connectionPill = useMemo(() => {
     if (!isLive) return null;
-    const map: Record<typeof wsStatus, string> = {
+    const map: Record<typeof connStatus, string> = {
       idle: 'idle',
       connecting: 'connecting…',
       open: 'live',
@@ -80,10 +118,23 @@ export default function StreamerClient({ streamer, workerWsUrl }: Props) {
     };
     return (
       <span className="rounded-full border border-border bg-card px-2 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
-        {map[wsStatus]}
+        {map[connStatus]}
       </span>
     );
-  }, [isLive, wsStatus]);
+  }, [isLive, connStatus]);
+
+  const sleepingMessage = useMemo(() => {
+    switch (streamer.status) {
+      case 'READY':
+        return 'Ready to go live — waiting for the deployer or a revival slot.';
+      case 'OFFLINE':
+        return 'Offline for now. Pre-debut streamers wake up once deployed.';
+      case 'COOLING_DOWN':
+        return 'Cooling down. Back soon.';
+      default:
+        return null;
+    }
+  }, [streamer.status]);
 
   return (
     <main className="min-h-screen bg-background">
@@ -107,13 +158,19 @@ export default function StreamerClient({ streamer, workerWsUrl }: Props) {
               <code className="font-mono text-xs">
                 {truncateWallet(streamer.owner_wallet)}
               </code>
+              {wsInfo ? (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  session {wsInfo.sessionId.slice(0, 8)}
+                </span>
+              ) : null}
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            {isLive ? (
+            {(isLive || streamer.status === 'COOLING_DOWN') &&
+            displayRemaining !== null ? (
               <span className="rounded-md border border-border bg-card px-3 py-1 font-mono text-sm tabular-nums">
-                {formatRemaining(secondsRemaining)}
+                {formatRemaining(displayRemaining)}
               </span>
             ) : null}
             <span
@@ -142,6 +199,21 @@ export default function StreamerClient({ streamer, workerWsUrl }: Props) {
               <div className="pointer-events-none absolute inset-x-0 bottom-4 mx-auto max-w-2xl px-4">
                 <div className="rounded-xl bg-black/60 px-4 py-3 text-center text-sm text-white backdrop-blur">
                   {subtitles[subtitles.length - 1]?.content}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Sleeping overlay */}
+            {!isLive && sleepingMessage ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-4 mx-auto max-w-xl px-4 text-center">
+                <div className="rounded-xl bg-black/60 px-4 py-3 text-sm text-white backdrop-blur">
+                  {sleepingMessage}
+                  {streamer.status === 'COOLING_DOWN' &&
+                  cooldownRemaining !== null ? (
+                    <span className="ml-1 font-mono tabular-nums">
+                      ({formatRemaining(cooldownRemaining)})
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ) : null}
