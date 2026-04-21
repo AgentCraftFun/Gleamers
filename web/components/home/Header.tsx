@@ -21,12 +21,7 @@ export function Header({ tokenLive }: Props) {
           <Link href="/" className="hover:text-foreground">
             Discover
           </Link>
-          <Link
-            href="/deploy"
-            aria-disabled="true"
-            className="pointer-events-none opacity-60"
-            title="Deploy flow ships in a later prompt"
-          >
+          <Link href="/deploy" className="hover:text-foreground">
             Deploy
           </Link>
           <Link

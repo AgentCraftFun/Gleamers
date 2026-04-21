@@ -31,3 +31,8 @@ coverage/
 
 # Large binary fallback (download locally — see web/public/README.md)
 web/public/demo.vrm
+
+# Preset + uploaded avatars — keep the directories (via README) but
+# skip the binaries so the repo stays small.
+web/public/presets/*.vrm
+web/public/uploads/*.vrm

@@ -34,14 +34,7 @@ export function Hero({ tokenLive, liveCount }: Props) {
 
         <div className="flex flex-wrap gap-3">
           <Button asChild size="lg">
-            <Link
-              href="/deploy"
-              aria-disabled="true"
-              title="Deploy flow ships in a later prompt"
-              className="pointer-events-auto"
-            >
-              Deploy your streamer
-            </Link>
+            <Link href="/deploy">Deploy your streamer</Link>
           </Button>
           <Button asChild variant="outline" size="lg">
             <Link href="#live">Watch live</Link>
