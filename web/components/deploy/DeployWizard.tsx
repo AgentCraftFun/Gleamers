@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getChainId } from '@/lib/chain';
 import { DEPLOY_FEE_ABI } from '@/lib/deploy/chain';
+import { track } from '@/lib/analytics';
 import { useDeployDraft } from './useDeployDraft';
 import { PersonalityStep } from './steps/PersonalityStep';
 import { VoiceStep } from './steps/VoiceStep';
@@ -123,6 +124,11 @@ export function DeployWizard({ tokenLive, isAdmin }: Props) {
       }
       clear();
       setStage({ kind: 'done', slug: body.slug });
+      track({
+        name: 'streamer_deployed',
+        slug: body.slug,
+        feePaid: String(body.feePaid ?? '0'),
+      });
       router.push(`/s/${encodeURIComponent(body.slug)}`);
     } catch (err) {
       setStage({
@@ -161,6 +167,11 @@ export function DeployWizard({ tokenLive, isAdmin }: Props) {
         }
         clear();
         setStage({ kind: 'done', slug: body.slug });
+        track({
+          name: 'streamer_deployed',
+          slug: body.slug,
+          feePaid: '0',
+        });
         router.push(`/s/${encodeURIComponent(body.slug)}`);
       } catch (err) {
         setStage({ kind: 'error', message: `Create threw: ${String(err)}` });

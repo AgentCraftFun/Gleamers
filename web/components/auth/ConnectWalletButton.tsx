@@ -11,6 +11,7 @@ import {
 import { useAccount, useDisconnect } from 'wagmi';
 
 import { useMe } from '@/lib/auth/useMe';
+import { track } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
 
 function formatBalance(raw: string | null): string | null {
@@ -70,6 +71,12 @@ export function ConnectWalletButton() {
             body: JSON.stringify({ message, signature }),
           });
           if (res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              walletAddress?: string;
+            };
+            if (body.walletAddress) {
+              track({ name: 'wallet_connected', address: body.walletAddress });
+            }
             await refresh();
             return true;
           }

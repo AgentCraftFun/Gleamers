@@ -1,9 +1,56 @@
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { createSupabaseServer } from '@/lib/supabase';
 import StreamerClient from './StreamerClient';
 
 interface PageProps {
   params: { slug: string };
+}
+
+export async function generateMetadata({
+  params,
+}: PageProps): Promise<Metadata> {
+  let name = params.slug;
+  let status: string | null = null;
+  try {
+    const sb = createSupabaseServer();
+    const { data } = await sb
+      .from('streamers')
+      .select('name, status')
+      .eq('slug', params.slug)
+      .maybeSingle();
+    if (data) {
+      name = data.name;
+      status = data.status;
+    }
+  } catch {
+    /* noop — metadata falls back to defaults */
+  }
+  const title =
+    status === 'LIVE'
+      ? `${name} — Live on Gleamers`
+      : `${name} — Gleamers`;
+  const description =
+    status === 'LIVE'
+      ? `${name} is streaming right now. Chat is open to everyone.`
+      : `AI VTuber on Gleamers. Deployed on-chain, chat open to everyone.`;
+  const ogImage = `/api/og/${encodeURIComponent(params.slug)}`;
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: 'website',
+      images: [{ url: ogImage, width: 1200, height: 630, alt: name }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: [ogImage],
+    },
+  };
 }
 
 interface WsInfo {

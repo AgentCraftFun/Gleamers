@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { track } from '@/lib/analytics';
 
 interface Props {
   slug: string;
@@ -17,6 +18,7 @@ export function GoLiveModal({ slug, open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   async function confirm() {
+    track({ name: 'go_live_clicked', slug });
     setState('sending');
     setError(null);
     try {

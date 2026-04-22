@@ -167,29 +167,52 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
   const wsRef = useRef<WebSocket | null>(null);
   const pipeRef = useRef<AudioPipeline | null>(null);
   const expressionResetRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const attemptRef = useRef(0);
 
   useEffect(() => {
     if (!enabled || !wsUrl) return;
 
     let cancelled = false;
-    setStatus('connecting');
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    const MAX_ATTEMPTS = 5;
+    const scheduleReconnect = () => {
+      if (cancelled) return;
+      if (attemptRef.current >= MAX_ATTEMPTS) {
+        setStatus('error');
+        return;
+      }
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s.
+      const delayMs = Math.min(16_000, 2 ** attemptRef.current * 1000);
+      attemptRef.current += 1;
+      reconnectTimerRef.current = window.setTimeout(connect, delayMs);
+    };
 
-    ws.addEventListener('open', () => {
+    const connect = () => {
       if (cancelled) return;
-      setStatus('open');
-    });
-    ws.addEventListener('error', () => {
-      if (cancelled) return;
-      setStatus('error');
-    });
-    ws.addEventListener('close', () => {
-      if (cancelled) return;
-      setStatus((s) => (s === 'error' ? 'error' : 'closed'));
-    });
+      setStatus('connecting');
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.addEventListener('message', (ev) => {
+      ws.addEventListener('open', () => {
+        if (cancelled) return;
+        attemptRef.current = 0;
+        setStatus('open');
+      });
+      ws.addEventListener('error', () => {
+        if (cancelled) return;
+        setStatus('error');
+      });
+      ws.addEventListener('close', () => {
+        if (cancelled) return;
+        if (sessionEnded) {
+          setStatus('closed');
+          return;
+        }
+        setStatus((s) => (s === 'error' ? 'error' : 'closed'));
+        scheduleReconnect();
+      });
+
+      ws.addEventListener('message', (ev) => {
       if (cancelled) return;
       let frame: WorkerFrame;
       try {
@@ -269,12 +292,19 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
           });
           break;
       }
-    });
+      });
+    };
+
+    connect();
 
     return () => {
       cancelled = true;
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       try {
-        ws.close();
+        wsRef.current?.close();
       } catch {
         /* noop */
       }
@@ -284,8 +314,9 @@ export function useWorkerSession(options: Options): UseWorkerSessionState {
       pipeRef.current?.dispose();
       pipeRef.current = null;
       setAudioElement(null);
+      attemptRef.current = 0;
     };
-  }, [wsUrl, enabled, maxSubtitles]);
+  }, [wsUrl, enabled, maxSubtitles, sessionEnded]);
 
   // Countdown tick (every 1s, local — the server also pushes every 10s).
   useEffect(() => {

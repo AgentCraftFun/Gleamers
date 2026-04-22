@@ -7,6 +7,8 @@ import { VRMAvatar } from '@/components/vrm/VRMAvatar';
 import { cn } from '@/lib/utils';
 import { useWorkerSession } from '@/lib/workerSession';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { ShareButton } from '@/components/ShareButton';
+import { track } from '@/lib/analytics';
 import type { StreamerStatus } from '@gleamers/shared';
 
 interface Streamer {
@@ -108,6 +110,25 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
     streamer.status === 'COOLING_DOWN' ? streamer.ready_at : null,
   );
 
+  // Fire-and-forget view analytics. stream_view_end carries the
+  // elapsed seconds so we can chart average watch time.
+  useEffect(() => {
+    if (!isLive) return;
+    track({
+      name: 'stream_view_start',
+      slug: streamer.slug,
+      sessionType: wsInfo?.sessionType ?? 'unknown',
+    });
+    const startedAt = Date.now();
+    return () => {
+      track({
+        name: 'stream_view_end',
+        slug: streamer.slug,
+        durationSec: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+      });
+    };
+  }, [isLive, streamer.slug, wsInfo?.sessionType]);
+
   const headerTitle = hello?.streamerName ?? streamer.name;
   const displayRemaining = isLive ? liveSeconds : cooldownRemaining;
 
@@ -171,6 +192,10 @@ export default function StreamerClient({ streamer, wsUrl, wsInfo }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
+            <ShareButton
+              shareTitle={`${streamer.name} on Gleamers`}
+              shareText={`Watching ${streamer.name} on Gleamers`}
+            />
             {isLive && wsInfo?.sessionType === 'revival' ? (
               <span
                 className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-200"

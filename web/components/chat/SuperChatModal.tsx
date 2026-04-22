@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { getChainId } from '@/lib/chain';
 import { paymentsAbi } from '@/lib/super-chat/abi';
 import { useTierAmounts } from '@/lib/super-chat/useTierAmounts';
+import { track } from '@/lib/analytics';
 
 interface Props {
   slug: string;
@@ -107,7 +108,15 @@ export function SuperChatModal({ slug, open, onClose }: Props) {
           });
           return;
         }
+        const body = await res.json().catch(() => ({}));
         setStage({ kind: 'done' });
+        track({
+          name: 'super_chat_sent',
+          slug,
+          tier,
+          amount: String(body.ownerPayout ?? amounts[tier] ?? '0'),
+          txHash: stage.txHash,
+        });
       } catch (err) {
         setStage({
           kind: 'error',
@@ -115,7 +124,7 @@ export function SuperChatModal({ slug, open, onClose }: Props) {
         });
       }
     })();
-  }, [receipt.data, stage, pendingId]);
+  }, [receipt.data, stage, pendingId, slug, tier, amounts]);
 
   const selectedAmount = amounts[tier];
   const tierInfo = SUPER_CHAT_TIER_COPY[tier];

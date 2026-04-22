@@ -15,6 +15,7 @@ import { getSupabaseBrowser } from '@/lib/supabase';
 import { truncateWallet } from '@/lib/format';
 import { useMe } from '@/lib/auth/useMe';
 import { SuperChatButton } from './SuperChatButton';
+import { track } from '@/lib/analytics';
 import {
   SUPER_CHAT_TIER_COPY,
   type SuperChatTier,
@@ -322,6 +323,11 @@ export function ChatPanel({
       setInput('');
       // Ensure /api/me reflects any lazy user creation.
       await refreshMe();
+      track({
+        name: 'chat_sent',
+        slug,
+        isAnonymous: me?.is_anonymous ?? true,
+      });
     } catch (err) {
       setError(String(err));
     } finally {

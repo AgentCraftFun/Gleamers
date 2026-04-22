@@ -67,6 +67,12 @@ Boots all three services concurrently:
 pnpm build
 ```
 
+## Deploying
+
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the full deployment guide,
+including the `TOKEN_LIVE` flip procedure, env-var reference, and
+day-2 ops checklist.
+
 ## Repository layout
 
 ```
