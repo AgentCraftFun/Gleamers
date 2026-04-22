@@ -465,7 +465,9 @@ export const DEPLOY_LIMITS = {
   monologueTopicsMax: 6,
   quirksMax: 6,
   tabooTopicsMax: 4,
-  vrmMaxBytes: 10 * 1024 * 1024,
+  // Architectural guardrail: VRM files must stay under 5MB so the
+  // avatar renderer boots fast on slow connections.
+  vrmMaxBytes: 5 * 1024 * 1024,
 } as const;
 
 export const DEPLOY_STARTERS = ['paranoid', 'unhinged', 'scholar'] as const;
